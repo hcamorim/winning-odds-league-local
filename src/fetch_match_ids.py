@@ -1,53 +1,71 @@
 import time
 from typing import List, Dict
 import logging
+from datetime import datetime
 from database.db_manager import DatabaseManager
 from api.riot_client import RiotClient
 from utils.logging_config import setup_logging
 
 logging.basicConfig(level=logging.INFO)
 
-class PUUIDFetcher:
+class MatchIDFetcher:
     def __init__(self):
         self.db = DatabaseManager()
         self.riot_client = RiotClient()
         self.batch_size = 100  # Maximum calls per 2 minutes
         self.rate_limit_window = 120  # 2 minutes in seconds
 
-    def get_summoners_without_puuid(self) -> List[Dict]:
-        """Fetch summoners that don't have a PUUID yet."""
+    def get_summoners_for_match_fetch(self) -> List[Dict]:
+        """Fetch summoners that we need matches for."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute("""
-                SELECT summonerID, region
+                SELECT puuid, region, created_at
                 FROM Summoners
-                WHERE puuid IS NULL
+                WHERE puuid IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM MatchIDs 
+                    WHERE MatchIDs.summoner_puuid = Summoners.puuid
+                )
             """)
-            return [{"summonerID": row[0], "region": row[1]} for row in cursor.fetchall()]
+            return [
+                {
+                    "puuid": row[0], 
+                    "region": row[1],
+                    "created_at": datetime.strptime(row[2], '%Y-%m-%d %H:%M:%S')
+                } 
+                for row in cursor.fetchall()
+            ]
         finally:
             conn.close()
 
-    def update_puuid_batch(self, summoners: List[Dict]) -> None:
-        """Update PUUIDs for a batch of summoners."""
+    def update_match_ids_batch(self, summoners: List[Dict]) -> None:
+        """Fetch and store match IDs for a batch of summoners."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
         try:
             for summoner in summoners:
                 try:
-                    response = self.riot_client.get_summoner_by_id(
-                        summoner["summonerID"], 
-                        summoner["region"]
+                    # Get match IDs for this summoner
+                    match_ids = self.riot_client.get_matches_by_puuid(
+                        summoner["puuid"],
+                        summoner["region"],
+                        start_time=int(summoner["created_at"].timestamp())
                     )
-                    if response and "puuid" in response:
+                    
+                    # Insert match IDs (unique constraint will handle duplicates)
+                    for match_id in match_ids:
                         cursor.execute("""
-                            UPDATE Summoners
-                            SET puuid = ?
-                            WHERE summonerID = ? AND region = ?
-                        """, (response["puuid"], summoner["summonerID"], summoner["region"]))
-                        logging.info(f"Updated PUUID for summoner {summoner['summonerID']}")
+                            INSERT OR IGNORE INTO MatchIDs (
+                                match_id, summoner_puuid, region
+                            ) VALUES (?, ?, ?)
+                        """, (match_id, summoner["puuid"], summoner["region"]))
+                    
+                    logging.info(f"Processed {len(match_ids)} matches for summoner {summoner['puuid']}")
+
                 except Exception as e:
-                    logging.error(f"Error updating PUUID for summoner {summoner['summonerID']}: {str(e)}")
+                    logging.error(f"Error processing matches for summoner {summoner['puuid']}: {str(e)}")
             
             conn.commit()
         finally:
@@ -55,20 +73,19 @@ class PUUIDFetcher:
 
     def process_summoners(self, num_batches: int = None) -> None:
         """Process summoners in batches, with option to limit number of batches."""
-        summoners = self.get_summoners_without_puuid()
+        summoners = self.get_summoners_for_match_fetch()
         total_summoners = len(summoners)
         total_possible_batches = (total_summoners + self.batch_size - 1) // self.batch_size
         
         # Calculate estimated time
-        estimated_time_per_batch = self.rate_limit_window  # 2 minutes per batch
+        estimated_time_per_batch = self.rate_limit_window
         total_estimated_time = total_possible_batches * estimated_time_per_batch
 
-        logging.info(f"Found {total_summoners} summoners without PUUID")
+        logging.info(f"Found {total_summoners} summoners needing match IDs")
         logging.info(f"This will require {total_possible_batches} batches total")
         logging.info(f"Estimated time for all batches: {total_estimated_time/60:.1f} minutes")
 
         if num_batches is None:
-            # Ask user how many batches to process
             while True:
                 try:
                     user_input = input(f"\nHow many batches would you like to process? (1-{total_possible_batches}, or 0 for all): ")
@@ -91,9 +108,8 @@ class PUUIDFetcher:
             logging.info(f"\nProcessing batch {i//self.batch_size + 1} of {batches_to_process}")
             
             start_time = time.time()
-            self.update_puuid_batch(batch)
+            self.update_match_ids_batch(batch)
             
-            # Calculate time to wait before next batch
             elapsed_time = time.time() - start_time
             wait_time = max(0, self.rate_limit_window - elapsed_time)
             
@@ -101,14 +117,10 @@ class PUUIDFetcher:
                 logging.info(f"Rate limit window - waiting {wait_time:.2f} seconds before next batch")
                 time.sleep(wait_time)
 
-        remaining = total_summoners - (batches_to_process * self.batch_size)
-        if remaining > 0:
-            logging.info(f"\nCompleted requested batches. {remaining} summoners remaining to be processed in the future.")
-
 def main():
-    fetcher = PUUIDFetcher()
+    fetcher = MatchIDFetcher()
     fetcher.process_summoners()
 
 if __name__ == "__main__":
-    setup_logging("fetch_puuids")
-    main()  
+    setup_logging("fetch_match_ids")
+    main() 

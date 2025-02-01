@@ -42,9 +42,23 @@ class DatabaseManager:
                 columns = [col[1] for col in cursor.fetchall()]
                 
                 if 'created_at' not in columns:
-                    cursor.execute("ALTER TABLE Summoners ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+                    cursor.execute("ALTER TABLE Summoners ADD COLUMN created_at TIMESTAMP")
+                    cursor.execute("UPDATE Summoners SET created_at = CURRENT_TIMESTAMP")
                 if 'updated_at' not in columns:
-                    cursor.execute("ALTER TABLE Summoners ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+                    cursor.execute("ALTER TABLE Summoners ADD COLUMN updated_at TIMESTAMP")
+                    cursor.execute("UPDATE Summoners SET updated_at = CURRENT_TIMESTAMP")
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS MatchIDs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    match_id TEXT NOT NULL,
+                    summoner_puuid TEXT NOT NULL,
+                    region TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(match_id),
+                    FOREIGN KEY(summoner_puuid) REFERENCES Summoners(puuid)
+                )
+            """)
             
             conn.commit()
         finally:
@@ -102,7 +116,7 @@ class DatabaseManager:
             cursor.execute("SELECT COUNT(*) FROM Summoners")
             count_before = cursor.fetchone()[0]
 
-            # Update existing records
+            # Update existing records (only if rank changed)
             cursor.execute("""
                 UPDATE Summoners
                 SET 
@@ -118,6 +132,7 @@ class DatabaseManager:
                     FROM temp_summoners temp 
                     WHERE temp.summonerID = Summoners.summonerID 
                     AND temp.region = Summoners.region
+                    AND temp.rank != Summoners.rank
                 )
             """)
             updated_count = cursor.rowcount

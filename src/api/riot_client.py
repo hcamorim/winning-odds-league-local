@@ -3,6 +3,7 @@ import time
 import requests
 from dotenv import load_dotenv
 import logging
+from typing import List
 
 logging.basicConfig(level=logging.INFO)
 
@@ -74,3 +75,34 @@ class RiotClient:
         
         response.raise_for_status()
         return response.json() 
+
+    def get_matches_by_puuid(self, puuid: str, region: str, start_time: int = None) -> List[str]:
+        """Fetch match IDs for a summoner."""
+        region_routing = self._get_region_routing(region)
+        url = f"https://{region_routing}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
+        
+        params = {
+            "startTime": start_time,
+            "queue": 420,  # Ranked Solo/Duo games only
+            "count": 100   # Maximum allowed
+        }
+        
+        response = requests.get(url, headers=self.headers, params=params)
+        if response.status_code == 429:  # Rate limit exceeded
+            retry_after = int(response.headers.get("Retry-After", 60))
+            logging.warning(f"Rate limit exceeded. Retrying after {retry_after} seconds...")
+            time.sleep(retry_after)
+            return self.get_matches_by_puuid(puuid, region, start_time)
+        
+        response.raise_for_status()
+        return response.json()
+
+    def _get_region_routing(self, region: str) -> str:
+        """Convert platform routing to region routing."""
+        routing_map = {
+            'euw1': 'europe',
+            'eun1': 'europe',
+            'kr': 'asia',
+            'na1': 'americas'
+        }
+        return routing_map.get(region, 'europe') 
