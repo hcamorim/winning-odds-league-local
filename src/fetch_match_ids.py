@@ -21,13 +21,17 @@ class MatchIDFetcher:
         cursor = conn.cursor()
         try:
             cursor.execute("""
-                SELECT puuid, region, created_at
-                FROM Summoners
-                WHERE puuid IS NOT NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM MatchIDs 
-                    WHERE MatchIDs.summoner_puuid = Summoners.puuid
-                )
+                SELECT 
+                    s.puuid, 
+                    s.region, 
+                    COALESCE(
+                        MAX(m.created_at),  -- If they have matches, use latest match timestamp
+                        s.created_at        -- If no matches, use when they were added to database
+                    ) as start_time
+                FROM Summoners s
+                LEFT JOIN MatchIDs m ON s.puuid = m.summoner_puuid
+                WHERE s.puuid IS NOT NULL
+                GROUP BY s.puuid, s.region, s.created_at
             """)
             return [
                 {

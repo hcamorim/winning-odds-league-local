@@ -60,6 +60,21 @@ class DatabaseManager:
                 )
             """)
             
+            # Add MatchMetadata table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS MatchMetadata (
+                    match_id TEXT PRIMARY KEY,
+                    game_duration INTEGER,
+                    game_version TEXT,
+                    queue_id INTEGER,
+                    winner_team_id INTEGER,
+                    early_surrender BOOLEAN,
+                    game_start_timestamp INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(match_id) REFERENCES MatchIDs(match_id)
+                )
+            """)
+            
             conn.commit()
         finally:
             conn.close()

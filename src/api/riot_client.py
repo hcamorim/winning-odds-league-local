@@ -3,7 +3,7 @@ import time
 import requests
 from dotenv import load_dotenv
 import logging
-from typing import List
+from typing import List, Dict
 
 logging.basicConfig(level=logging.INFO)
 
@@ -106,3 +106,18 @@ class RiotClient:
             'na1': 'americas'
         }
         return routing_map.get(region, 'europe') 
+
+    def get_match_metadata(self, match_id: str, region: str) -> Dict:
+        """Fetch basic match data."""
+        region_routing = self._get_region_routing(region)
+        url = f"https://{region_routing}.api.riotgames.com/lol/match/v5/matches/{match_id}"
+        
+        response = requests.get(url, headers=self.headers)
+        if response.status_code == 429:  # Rate limit exceeded
+            retry_after = int(response.headers.get("Retry-After", 60))
+            logging.warning(f"Rate limit exceeded. Retrying after {retry_after} seconds...")
+            time.sleep(retry_after)
+            return self.get_match_metadata(match_id, region)
+        
+        response.raise_for_status()
+        return response.json()
